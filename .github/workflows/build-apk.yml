@@ -1,0 +1,74 @@
+name: Build APK
+run-name: build-${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "ID job dari bot"
+        required: true
+      zip_path:
+        description: "Path zip di repo ini"
+        required: false
+        default: ""
+      repo_url:
+        description: "URL repo GitHub (alternatif zip)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Ambil source
+        env:
+          ZIP_PATH: ${{ inputs.zip_path }}
+          REPO_URL: ${{ inputs.repo_url }}
+        run: |
+          mkdir -p /tmp/src
+          if [ -n "$ZIP_PATH" ]; then
+            unzip -q "$ZIP_PATH" -d /tmp/src
+          elif [ -n "$REPO_URL" ]; then
+            git clone --depth 1 "$REPO_URL" /tmp/src
+          else
+            echo "Tidak ada source"; exit 1
+          fi
+
+      - name: Build debug APK
+        run: |
+          WRAPPER=$(find /tmp/src -name gradlew -not -path "*/node_modules/*" | head -1)
+          if [ -n "$WRAPPER" ]; then
+            ROOT=$(dirname "$WRAPPER")
+            cd "$ROOT"
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            SETTINGS=$(find /tmp/src \( -name settings.gradle -o -name settings.gradle.kts \) | head -1)
+            [ -z "$SETTINGS" ] && { echo "Bukan project Gradle"; exit 1; }
+            cd "$(dirname "$SETTINGS")"
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
+          echo "ROOT=$(pwd)" >> "$GITHUB_ENV"
+
+      - name: Kumpulin APK
+        run: |
+          mkdir -p /tmp/out
+          find "$ROOT" -path "*build/outputs/apk*" -name "*.apk" -exec cp {} /tmp/out/ \;
+          ls -la /tmp/out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ inputs.job_id }}
+          path: /tmp/out/*.apk
+          if-no-files-found: error
+          retention-days: 1
